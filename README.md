@@ -45,8 +45,15 @@ Place your documents (PDF, TXT, MD files) in the `data/documents/` folder.
 
 A sample document is included to get you started.
 
-### 4. Run the CLI
+### 4. Run the Application
 
+**Option A: Web UI (Streamlit)**
+```bash
+streamlit run src/app.py
+```
+Then open http://localhost:8501 in your browser.
+
+**Option B: Command Line**
 ```bash
 python -m src.cli
 ```
