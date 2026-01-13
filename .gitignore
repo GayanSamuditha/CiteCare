@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# RAG app generated data
+chroma_db/
+data/collections/
+data/documents/
