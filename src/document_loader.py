@@ -1,66 +1,84 @@
 """
-Document loading and text splitting utilities.
+Enhanced document loading and text splitting utilities.
 
-This module provides functions to:
-1. Load documents from various file formats (PDF, TXT, MD)
-2. Split documents into smaller chunks for embedding
+Features:
+- Page number tracking for PDFs
+- Improved chunking with better overlap
+- Metadata preservation for source citations
 """
 
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import (
     PyPDFLoader,
     TextLoader,
-    DirectoryLoader,
 )
 
 from src.config import CHUNK_SIZE, CHUNK_OVERLAP, DOCUMENTS_DIR
 
 
-def load_pdf(file_path: str) -> List[Document]:
+def load_pdf_with_pages(file_path: str) -> List[Document]:
     """
-    Load a PDF file and return a list of Document objects.
+    Load a PDF file with page number metadata.
     
     Args:
         file_path: Path to the PDF file
         
     Returns:
-        List of Document objects, one per page
+        List of Document objects with page metadata
     """
     loader = PyPDFLoader(file_path)
-    return loader.load()
+    pages = loader.load()
+    
+    # Enhance metadata with file info
+    file_name = Path(file_path).name
+    for i, page in enumerate(pages):
+        page.metadata["source"] = file_path
+        page.metadata["file_name"] = file_name
+        page.metadata["page"] = page.metadata.get("page", i) + 1  # 1-indexed
+        page.metadata["total_pages"] = len(pages)
+    
+    return pages
 
 
-def load_text(file_path: str) -> List[Document]:
+def load_text_file(file_path: str) -> List[Document]:
     """
-    Load a text file (.txt or .md) and return a list of Document objects.
+    Load a text file with metadata.
     
     Args:
         file_path: Path to the text file
         
     Returns:
-        List containing a single Document object
+        List containing Document objects
     """
     loader = TextLoader(file_path, encoding="utf-8")
-    return loader.load()
+    docs = loader.load()
+    
+    file_name = Path(file_path).name
+    for doc in docs:
+        doc.metadata["source"] = file_path
+        doc.metadata["file_name"] = file_name
+        doc.metadata["page"] = 1
+    
+    return docs
 
 
 def load_directory(
     directory_path: str = DOCUMENTS_DIR,
-    glob_pattern: str = "**/*.*"
+    collection_name: Optional[str] = None
 ) -> List[Document]:
     """
-    Load all supported documents from a directory.
+    Load all documents from a directory with enhanced metadata.
     
     Args:
-        directory_path: Path to the directory containing documents
-        glob_pattern: Pattern to match files (default: all files)
+        directory_path: Path to the directory
+        collection_name: Optional collection name to tag documents
         
     Returns:
-        List of Document objects from all files
+        List of Document objects
     """
     documents = []
     dir_path = Path(directory_path)
@@ -69,25 +87,31 @@ def load_directory(
         print(f"Warning: Directory {directory_path} does not exist")
         return documents
     
-    # Load PDFs
+    # Load PDFs with page tracking
     pdf_files = list(dir_path.glob("**/*.pdf"))
     for pdf_file in pdf_files:
         try:
-            docs = load_pdf(str(pdf_file))
+            docs = load_pdf_with_pages(str(pdf_file))
+            if collection_name:
+                for doc in docs:
+                    doc.metadata["collection"] = collection_name
             documents.extend(docs)
-            print(f"Loaded {len(docs)} pages from {pdf_file.name}")
+            print(f"✓ Loaded {len(docs)} pages from {pdf_file.name}")
         except Exception as e:
-            print(f"Error loading {pdf_file}: {e}")
+            print(f"✗ Error loading {pdf_file}: {e}")
     
     # Load text files
     txt_files = list(dir_path.glob("**/*.txt")) + list(dir_path.glob("**/*.md"))
     for txt_file in txt_files:
         try:
-            docs = load_text(str(txt_file))
+            docs = load_text_file(str(txt_file))
+            if collection_name:
+                for doc in docs:
+                    doc.metadata["collection"] = collection_name
             documents.extend(docs)
-            print(f"Loaded {txt_file.name}")
+            print(f"✓ Loaded {txt_file.name}")
         except Exception as e:
-            print(f"Error loading {txt_file}: {e}")
+            print(f"✗ Error loading {txt_file}: {e}")
     
     return documents
 
@@ -98,68 +122,41 @@ def split_documents(
     chunk_overlap: int = CHUNK_OVERLAP
 ) -> List[Document]:
     """
-    Split documents into smaller chunks for embedding.
+    Split documents into chunks while preserving metadata.
     
-    Uses RecursiveCharacterTextSplitter which tries to split on:
-    1. Paragraphs (\\n\\n)
-    2. Lines (\\n)
-    3. Sentences (. ! ?)
-    4. Words (spaces)
-    
-    Args:
-        documents: List of Document objects to split
-        chunk_size: Maximum size of each chunk in characters
-        chunk_overlap: Number of characters to overlap between chunks
-        
-    Returns:
-        List of smaller Document objects
+    Uses smaller chunks with more overlap for better context.
     """
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         length_function=len,
-        separators=["\n\n", "\n", ". ", " ", ""]
+        separators=["\n\n", "\n", ". ", ", ", " ", ""],
+        keep_separator=True
     )
     
     chunks = text_splitter.split_documents(documents)
-    print(f"Split {len(documents)} documents into {len(chunks)} chunks")
     
+    # Add chunk index to metadata
+    for i, chunk in enumerate(chunks):
+        chunk.metadata["chunk_index"] = i
+    
+    print(f"Split {len(documents)} documents into {len(chunks)} chunks")
     return chunks
 
 
 def load_and_split(
     directory_path: str = DOCUMENTS_DIR,
     chunk_size: int = CHUNK_SIZE,
-    chunk_overlap: int = CHUNK_OVERLAP
+    chunk_overlap: int = CHUNK_OVERLAP,
+    collection_name: Optional[str] = None
 ) -> List[Document]:
     """
-    Convenience function to load documents and split them in one step.
-    
-    Args:
-        directory_path: Path to directory containing documents
-        chunk_size: Maximum size of each chunk
-        chunk_overlap: Overlap between chunks
-        
-    Returns:
-        List of chunked Document objects ready for embedding
+    Load and split documents in one step.
     """
-    documents = load_directory(directory_path)
+    documents = load_directory(directory_path, collection_name)
     
     if not documents:
-        print("No documents found to process")
+        print("No documents found")
         return []
     
-    chunks = split_documents(documents, chunk_size, chunk_overlap)
-    return chunks
-
-
-if __name__ == "__main__":
-    # Example usage
-    print("Loading documents from:", DOCUMENTS_DIR)
-    chunks = load_and_split()
-    
-    if chunks:
-        print(f"\nFirst chunk preview:")
-        print("-" * 50)
-        print(chunks[0].page_content[:200])
-        print("-" * 50)
+    return split_documents(documents, chunk_size, chunk_overlap)

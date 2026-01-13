@@ -1,18 +1,16 @@
 """
-RAG (Retrieval-Augmented Generation) chain implementation.
+Clinical Evidence RAG Chain with confidence scoring.
 
-This module provides the main RAG functionality that:
-1. Retrieves relevant documents based on a query
-2. Passes context to the LLM
-3. Generates an answer grounded in the retrieved documents
+Features:
+- Evidence-based answers with citations
+- Confidence scoring based on source quality
+- Structured responses for clinical use
 """
 
-from typing import List, Optional
+from typing import List, Dict, Any
 
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough, RunnableParallel
 from langchain_core.documents import Document
 from langchain_chroma import Chroma
 
@@ -20,78 +18,90 @@ from src.config import CHAT_MODEL, RETRIEVAL_K
 from src.vectorstore import get_retriever
 
 
-# Default RAG prompt template
-RAG_PROMPT_TEMPLATE = """You are a helpful assistant that answers questions based on the provided context.
+# Clinical Evidence RAG Prompt
+CLINICAL_RAG_PROMPT = """You are a clinical research assistant helping analyze medical and scientific literature.
 
-Use ONLY the following context to answer the question. If the context doesn't contain enough information to answer the question, say "I don't have enough information to answer that question."
+INSTRUCTIONS:
+1. Carefully analyze the provided research excerpts
+2. Provide a clear, evidence-based answer to the question
+3. Structure your response appropriately for clinical/research use
+4. Be precise about what the evidence shows vs. what it doesn't
+5. Note any limitations or caveats in the available evidence
+6. If the context doesn't contain sufficient information, clearly state this
 
-Context:
+RESEARCH CONTEXT:
 {context}
 
-Question: {question}
+QUESTION: {question}
 
-Answer:"""
+Provide a comprehensive, evidence-based response:"""
 
 
-def format_docs(docs: List[Document]) -> str:
-    """
-    Format a list of documents into a single string for the prompt.
+# Confidence Assessment Prompt
+CONFIDENCE_PROMPT = """Based on the sources provided, assess the evidence confidence level.
+
+Consider:
+- How directly do the sources address the question?
+- How many independent sources support the answer?
+- Are there any contradictions or limitations?
+- Is this primary research, review, or guidelines?
+
+Sources summary:
+{sources_summary}
+
+Question asked: {question}
+
+Provide a brief (1-2 sentence) confidence assessment in this format:
+"Evidence Confidence: [HIGH/MODERATE/LOW] - [brief explanation]"
+
+Only output the confidence assessment, nothing else."""
+
+
+def format_docs_with_metadata(docs: List[Document]) -> str:
+    """Format documents with source information."""
+    formatted_parts = []
     
-    Args:
-        docs: List of Document objects
+    for i, doc in enumerate(docs, 1):
+        file_name = doc.metadata.get("file_name", "Unknown")
+        page = doc.metadata.get("page", "N/A")
         
-    Returns:
-        Formatted string with all document contents
-    """
-    return "\n\n---\n\n".join(doc.page_content for doc in docs)
+        header = f"[Source {i}: {file_name}, Page {page}]"
+        content = doc.page_content.strip()
+        
+        formatted_parts.append(f"{header}\n{content}")
+    
+    return "\n\n---\n\n".join(formatted_parts)
+
+
+def get_sources_summary(sources: List[Dict]) -> str:
+    """Create a summary of sources for confidence assessment."""
+    summary_parts = []
+    for i, src in enumerate(sources, 1):
+        file_name = src.get("file_name", "Unknown")
+        page = src.get("page", "N/A")
+        content_preview = src.get("content", "")[:150]
+        summary_parts.append(f"Source {i} ({file_name}, p.{page}): {content_preview}...")
+    return "\n".join(summary_parts)
 
 
 def create_rag_chain(
     vectorstore: Chroma,
     model_name: str = CHAT_MODEL,
-    k: int = RETRIEVAL_K,
-    custom_prompt: Optional[str] = None
+    k: int = RETRIEVAL_K
 ):
-    """
-    Create a RAG chain that retrieves context and generates answers.
-    
-    Args:
-        vectorstore: The Chroma vector store to retrieve from
-        model_name: Name of the Ollama model to use
-        k: Number of documents to retrieve
-        custom_prompt: Optional custom prompt template
-        
-    Returns:
-        A runnable RAG chain
-    """
-    # Initialize components
-    llm = ChatOllama(model=model_name)
+    """Create a basic RAG chain."""
+    llm = ChatOllama(model=model_name, temperature=0.1)
     retriever = get_retriever(vectorstore, k=k)
+    prompt = ChatPromptTemplate.from_template(CLINICAL_RAG_PROMPT)
     
-    # Use custom prompt or default
-    prompt_text = custom_prompt or RAG_PROMPT_TEMPLATE
-    prompt = ChatPromptTemplate.from_template(prompt_text)
+    def rag_invoke(question: str) -> str:
+        docs = retriever.invoke(question)
+        context = format_docs_with_metadata(docs)
+        messages = prompt.invoke({"context": context, "question": question})
+        response = llm.invoke(messages)
+        return response.content
     
-    # Build the chain using LCEL
-    # The chain:
-    # 1. Takes a question
-    # 2. Retrieves relevant documents
-    # 3. Formats them as context
-    # 4. Passes to the prompt template
-    # 5. Sends to the LLM
-    # 6. Parses the output as a string
-    
-    rag_chain = (
-        RunnableParallel(
-            context=retriever | format_docs,
-            question=RunnablePassthrough()
-        )
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
-    
-    return rag_chain
+    return rag_invoke
 
 
 def create_rag_chain_with_sources(
@@ -99,97 +109,102 @@ def create_rag_chain_with_sources(
     model_name: str = CHAT_MODEL,
     k: int = RETRIEVAL_K
 ):
-    """
-    Create a RAG chain that also returns the source documents.
-    
-    This is useful when you want to show users which documents
-    were used to generate the answer.
-    
-    Args:
-        vectorstore: The Chroma vector store to retrieve from
-        model_name: Name of the Ollama model to use
-        k: Number of documents to retrieve
-        
-    Returns:
-        A runnable that returns both answer and source documents
-    """
-    llm = ChatOllama(model=model_name)
+    """Create a clinical RAG chain with sources and confidence."""
+    llm = ChatOllama(model=model_name, temperature=0.1)
     retriever = get_retriever(vectorstore, k=k)
-    prompt = ChatPromptTemplate.from_template(RAG_PROMPT_TEMPLATE)
     
-    def format_docs_and_keep(docs: List[Document]) -> dict:
-        """Format docs and keep references for sources."""
-        return {
-            "formatted": format_docs(docs),
-            "sources": docs
-        }
+    main_prompt = ChatPromptTemplate.from_template(CLINICAL_RAG_PROMPT)
+    confidence_prompt = ChatPromptTemplate.from_template(CONFIDENCE_PROMPT)
     
-    # This chain returns both the answer and the source documents
-    def run_rag_with_sources(question: str) -> dict:
+    def rag_with_sources(question: str) -> Dict[str, Any]:
         # Retrieve documents
         docs = retriever.invoke(question)
         
         # Format context
-        context = format_docs(docs)
+        context = format_docs_with_metadata(docs)
         
-        # Generate answer
-        messages = prompt.invoke({"context": context, "question": question})
-        response = llm.invoke(messages)
-        answer = response.content
+        # Generate main answer
+        main_messages = main_prompt.invoke({"context": context, "question": question})
+        main_response = llm.invoke(main_messages)
+        
+        # Build source info
+        sources = []
+        for doc in docs:
+            sources.append({
+                "content": doc.page_content,
+                "file_name": doc.metadata.get("file_name", "Unknown"),
+                "page": doc.metadata.get("page", "N/A"),
+                "source": doc.metadata.get("source", ""),
+            })
+        
+        # Generate confidence assessment
+        sources_summary = get_sources_summary(sources)
+        conf_messages = confidence_prompt.invoke({
+            "sources_summary": sources_summary,
+            "question": question
+        })
+        confidence_response = llm.invoke(conf_messages)
         
         return {
-            "answer": answer,
-            "sources": docs,
-            "question": question
+            "answer": main_response.content,
+            "sources": sources,
+            "confidence": confidence_response.content,
+            "question": question,
+            "num_sources": len(sources)
         }
     
-    return run_rag_with_sources
+    return rag_with_sources
 
 
-def query_rag(
-    chain,
+def generate_markdown_summary(
     question: str,
-    verbose: bool = False
+    answer: str,
+    sources: List[Dict],
+    confidence: str,
+    collection_name: str = ""
 ) -> str:
-    """
-    Query the RAG chain with a question.
+    """Generate a Markdown summary for export."""
     
-    Args:
-        chain: The RAG chain to query
-        question: The question to ask
-        verbose: If True, print additional information
+    md_lines = [
+        "# Evidence Summary Report",
+        "",
+        f"**Collection:** {collection_name}" if collection_name else "",
+        f"**Generated:** {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        "",
+        "---",
+        "",
+        "## Question",
+        "",
+        question,
+        "",
+        "## Answer",
+        "",
+        answer,
+        "",
+        "## Evidence Assessment",
+        "",
+        confidence,
+        "",
+        "## Sources",
+        "",
+    ]
+    
+    for i, src in enumerate(sources, 1):
+        file_name = src.get("file_name", "Unknown")
+        page = src.get("page", "N/A")
+        content = src.get("content", "")[:500]
         
-    Returns:
-        The generated answer
-    """
-    if verbose:
-        print(f"Question: {question}")
-        print("Retrieving relevant documents...")
+        md_lines.extend([
+            f"### Source {i}: {file_name} (Page {page})",
+            "",
+            f"> {content}...",
+            "",
+        ])
     
-    answer = chain.invoke(question)
+    md_lines.extend([
+        "---",
+        "",
+        "*Generated by CiteCare - Clinical Evidence Q&A Assistant*"
+    ])
     
-    if verbose:
-        print(f"\nAnswer: {answer}")
-    
-    return answer
-
-
-if __name__ == "__main__":
-    # Example usage
-    from src.document_loader import load_and_split
-    from src.vectorstore import get_or_create_vectorstore
-    
-    # Load documents and create/load vector store
-    chunks = load_and_split()
-    vectorstore = get_or_create_vectorstore(chunks)
-    
-    # Create RAG chain
-    rag_chain = create_rag_chain(vectorstore)
-    
-    # Test with a question
-    question = "What is supervised learning?"
-    print(f"\nQuestion: {question}")
-    print("-" * 50)
-    
-    answer = query_rag(rag_chain, question)
-    print(f"\nAnswer:\n{answer}")
+    return "\n".join(md_lines)

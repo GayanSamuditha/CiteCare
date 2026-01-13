@@ -1,24 +1,25 @@
 """
 Configuration settings for the LangChain RAG system.
-
-This module centralizes all configuration including model names,
-chunk sizes, and other parameters.
 """
 
 # Ollama Model Configuration
-CHAT_MODEL = "llama3.2:3b"  # Model for text generation
-EMBEDDING_MODEL = "nomic-embed-text"  # Model for embeddings
+CHAT_MODEL = "llama3.2:3b"
+EMBEDDING_MODEL = "nomic-embed-text"
 
-# Text Splitting Configuration
-CHUNK_SIZE = 500  # Number of characters per chunk
-CHUNK_OVERLAP = 50  # Overlap between chunks for context continuity
+# Improved chunking for better accuracy
+CHUNK_SIZE = 400  # Smaller chunks for more precise retrieval
+CHUNK_OVERLAP = 100  # More overlap for better context
 
 # Vector Store Configuration
-CHROMA_PERSIST_DIR = "chroma_db"  # Directory to persist vector database
-COLLECTION_NAME = "documents"  # Name of the collection in ChromaDB
+CHROMA_PERSIST_DIR = "chroma_db"
+COLLECTION_NAME = "default"
 
-# Retrieval Configuration
-RETRIEVAL_K = 3  # Number of documents to retrieve
+# Retrieval Configuration  
+RETRIEVAL_K = 5  # Retrieve more documents for better context
 
 # Paths
-DOCUMENTS_DIR = "data/documents"  # Directory containing documents to index
+DOCUMENTS_DIR = "data/documents"
+COLLECTIONS_DIR = "data/collections"  # For multiple collections
+
+# Retention (days) default for collections
+DEFAULT_RETENTION_DAYS = 30

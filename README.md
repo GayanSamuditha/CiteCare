@@ -58,6 +58,17 @@ Then open http://localhost:8501 in your browser.
 python -m src.cli
 ```
 
+**Option C: Backend API (FastAPI)**
+```bash
+# in one terminal
+uvicorn src.api.server:app --reload --port 8000
+```
+Endpoints:
+- `GET /health`, `GET /ready`
+- `GET /collections` – list collections
+- `POST /collections` – build/update collection (requires docs in data/collections/<name>)
+- `POST /query` – { collection, question } returns answer + sources + confidence
+
 ## Project Structure
 
 ```
